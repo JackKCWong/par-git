@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"sync"
 
 	"github.com/go-git/go-git/v6"
@@ -19,6 +20,7 @@ var (
 	grepReferenceName string
 	grepPathSpecs     string
 	grepNamesOnly     bool
+	grepPretty        bool
 )
 
 type grepResult struct {
@@ -41,6 +43,7 @@ func init() {
 	grepCmd.Flags().StringVarP(&grepReferenceName, "branch", "b", "", "Branch or tag name to search in")
 	grepCmd.Flags().StringVarP(&grepPathSpecs, "pathspec", "p", "", "Pathspec pattern to filter files")
 	grepCmd.Flags().BoolVarP(&grepNamesOnly, "names-only", "", false, "Print only filenames with match count")
+	grepCmd.Flags().BoolVarP(&grepPretty, "pretty", "", false, "Format output as ASCII table")
 	rootCmd.AddCommand(grepCmd)
 }
 
@@ -129,17 +132,88 @@ func runGrep(cmd *cobra.Command, args []string) error {
 		close(results)
 	}()
 
-	for result := range results {
-		if grepNamesOnly {
-			for fileName, count := range result.fileNames {
-				fmt.Printf("\x1b[34m%s\x1b[0m:%s:%d\n", result.dir, fileName, count)
-			}
-		} else {
-			for _, match := range result.matches {
-				fmt.Printf("\x1b[34m%s\x1b[0m:%s\n", result.dir, match)
+	if grepPretty && !grepNamesOnly {
+		return fmt.Errorf("--pretty can only be used with --names-only")
+	}
+
+	if grepPretty && grepNamesOnly {
+		var allResults []grepResult
+		for result := range results {
+			allResults = append(allResults, result)
+		}
+		printPrettyTable(allResults)
+	} else {
+		for result := range results {
+			if grepNamesOnly {
+				for fileName, count := range result.fileNames {
+					fmt.Printf("\x1b[34m%s\x1b[0m:%s:%d\n", result.dir, fileName, count)
+				}
+			} else {
+				for _, match := range result.matches {
+					fmt.Printf("\x1b[34m%s\x1b[0m:%s\n", result.dir, match)
+				}
 			}
 		}
 	}
 
 	return nil
 }
+
+func printPrettyTable(results []grepResult) {
+	type tableRow struct{ repo, fileName, count string }
+	rows := make([]tableRow, 0)
+	for _, result := range results {
+		for fileName, count := range result.fileNames {
+			rows = append(rows, tableRow{result.dir, fileName, fmt.Sprintf("%d", count)})
+		}
+	}
+
+	repoLen := 4
+	fileNameLen := 8
+	countLen := 5
+	for _, r := range rows {
+		if len(r.repo) > repoLen {
+			repoLen = len(r.repo)
+		}
+		if len(r.fileName) > fileNameLen {
+			fileNameLen = len(r.fileName)
+		}
+	}
+
+	border := fmt.Sprintf("+%s+%s+%s+", strings.Repeat("-", repoLen), strings.Repeat("-", fileNameLen), strings.Repeat("-", countLen))
+	header := fmt.Sprintf("| %-*s | %-*s | %-*s |", repoLen, "Repo", fileNameLen, "Filename", countLen, "Count")
+
+	fmt.Println(border)
+	fmt.Println(header)
+	fmt.Println(border)
+	for _, r := range rows {
+		fmt.Printf("| %-*s | %-*s | %-*s |\n", repoLen, r.repo, fileNameLen, r.fileName, countLen, r.count)
+	}
+	fmt.Println(border)
+}
+
+func splitMatch(match string) []string {
+	var parts []string
+	var current string
+	inColor := false
+	for i := 0; i < len(match); i++ {
+		if match[i] == '\x1b' && i+1 < len(match) && match[i+1] == '[' {
+			inColor = true
+			i++
+			continue
+		}
+		if inColor && match[i] == 'm' {
+			inColor = false
+			continue
+		}
+		if match[i] == ':' && !inColor {
+			parts = append(parts, current)
+			current = ""
+		} else {
+			current += string(match[i])
+		}
+	}
+	parts = append(parts, current)
+	return parts
+}
+
