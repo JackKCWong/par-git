@@ -48,7 +48,10 @@ func init() {
 }
 
 func runGrep(cmd *cobra.Command, args []string) error {
-	pattern := args[0]
+	patterns := make([]*regexp.Regexp, 0, len(args))
+	for _, arg := range args {
+		patterns = append(patterns, regexp.MustCompile(arg))
+	}
 
 	if rootDir == "" {
 		rootDir = "."
@@ -88,7 +91,7 @@ func runGrep(cmd *cobra.Command, args []string) error {
 			}
 
 			grepOpts := &git.GrepOptions{
-				Patterns: []*regexp.Regexp{regexp.MustCompile(pattern)},
+				Patterns: patterns,
 			}
 
 			if grepInvertMatch {
@@ -116,8 +119,13 @@ func runGrep(cmd *cobra.Command, args []string) error {
 				if grepNamesOnly {
 					fileNames[match.FileName]++
 				} else {
-					highlighted := regexp.MustCompile("(?i)(" + pattern + ")").ReplaceAllString(match.Content, "\x1b[31m$1\x1b[0m")
-					matches = append(matches, fmt.Sprintf("%s:%d:%s", match.FileName, match.LineNumber, highlighted))
+					content := match.Content
+					for _, p := range patterns {
+						content = p.ReplaceAllStringFunc(content, func(s string) string {
+							return "\x1b[31m" + s + "\x1b[0m"
+						})
+					}
+					matches = append(matches, fmt.Sprintf("%s:%d:%s", match.FileName, match.LineNumber, content))
 				}
 			}
 
