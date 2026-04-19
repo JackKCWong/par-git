@@ -8,10 +8,17 @@ import (
 	"sync"
 
 	"github.com/go-git/go-git/v6"
+	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/spf13/cobra"
 )
 
-var rootDir string
+var (
+	rootDir          string
+	grepInvertMatch  bool
+	grepCommitHash   string
+	grepReferenceName string
+	grepPathSpecs    string
+)
 
 type grepResult struct {
 	dir     string
@@ -27,6 +34,10 @@ var grepCmd = &cobra.Command{
 
 func init() {
 	grepCmd.Flags().StringVarP(&rootDir, "directory", "C", "", "Root directory to search for git repos")
+	grepCmd.Flags().BoolVarP(&grepInvertMatch, "invert-match", "v", false, "Select non-matching lines")
+	grepCmd.Flags().StringVarP(&grepCommitHash, "commit", "c", "", "Commit hash to search in")
+	grepCmd.Flags().StringVarP(&grepReferenceName, "branch", "b", "", "Branch or tag name to search in")
+	grepCmd.Flags().StringVarP(&grepPathSpecs, "pathspec", "p", "", "Pathspec pattern to filter files")
 	rootCmd.AddCommand(grepCmd)
 }
 
@@ -70,9 +81,25 @@ func runGrep(cmd *cobra.Command, args []string) error {
 				return
 			}
 
-			grepResults, err := worktree.Grep(&git.GrepOptions{
+			grepOpts := &git.GrepOptions{
 				Patterns: []*regexp.Regexp{regexp.MustCompile(pattern)},
-			})
+			}
+
+			if grepInvertMatch {
+				grepOpts.InvertMatch = true
+			}
+			if grepCommitHash != "" {
+				hash := plumbing.NewHash(grepCommitHash)
+				grepOpts.CommitHash = hash
+			}
+			if grepReferenceName != "" {
+				grepOpts.ReferenceName = plumbing.ReferenceName(grepReferenceName)
+			}
+			if grepPathSpecs != "" {
+				grepOpts.PathSpecs = []*regexp.Regexp{regexp.MustCompile(grepPathSpecs)}
+			}
+
+			grepResults, err := worktree.Grep(grepOpts)
 			if err != nil {
 				return
 			}
