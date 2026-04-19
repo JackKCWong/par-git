@@ -8,12 +8,18 @@ import (
 	"sync"
 
 	"github.com/go-git/go-git/v6"
+	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/spf13/cobra"
 )
 
 var (
-	cloneFile   string
-	parallelism int
+	cloneFile          string
+	parallelism        int
+	cloneBranch        string
+	cloneDepth         int
+	cloneRecurseSubmodules bool
+	cloneSingleBranch  bool
+	cloneBare          bool
 )
 
 type cloneResult struct {
@@ -31,6 +37,11 @@ var cloneCmd = &cobra.Command{
 func init() {
 	cloneCmd.Flags().StringVarP(&cloneFile, "file", "f", "", "File containing git URLs to clone (one per line)")
 	cloneCmd.Flags().IntVarP(&parallelism, "parallelism", "c", 8, "Number of clones to run in parallel")
+	cloneCmd.Flags().StringVarP(&cloneBranch, "branch", "b", "", "Branch to checkout after clone")
+	cloneCmd.Flags().IntVar(&cloneDepth, "depth", 0, "Create a shallow clone with the specified history depth (0 for full clone)")
+	cloneCmd.Flags().BoolVar(&cloneRecurseSubmodules, "recurse-submodules", false, "Initialize and clone submodules")
+	cloneCmd.Flags().BoolVar(&cloneSingleBranch, "single-branch", false, "Clone only the specified branch")
+	cloneCmd.Flags().BoolVar(&cloneBare, "bare", false, "Clone as a bare repository")
 	rootCmd.AddCommand(cloneCmd)
 }
 
@@ -67,9 +78,26 @@ func runClone(cmd *cobra.Command, args []string) error {
 			dir := filepath.Base(url)
 			dir = strings.TrimSuffix(dir, ".git")
 
-			_, err := git.PlainClone(dir, &git.CloneOptions{
+			co := &git.CloneOptions{
 				URL: url,
-			})
+			}
+			if cloneBranch != "" {
+				co.ReferenceName = plumbing.NewBranchReferenceName(cloneBranch)
+			}
+			if cloneDepth > 0 {
+				co.Depth = cloneDepth
+			}
+			if cloneRecurseSubmodules {
+				co.RecurseSubmodules = git.DefaultSubmoduleRecursionDepth
+			}
+			if cloneSingleBranch {
+				co.SingleBranch = cloneSingleBranch
+			}
+			if cloneBare {
+				co.Bare = cloneBare
+			}
+
+			_, err := git.PlainClone(dir, co)
 
 			results <- cloneResult{url: url, dir: dir, err: err}
 		}(url)
