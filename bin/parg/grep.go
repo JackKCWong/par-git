@@ -106,7 +106,8 @@ func runGrep(cmd *cobra.Command, args []string) error {
 
 			matches := make([]string, 0, len(grepResults))
 			for _, match := range grepResults {
-				matches = append(matches, fmt.Sprintf("%s:%d:%s", match.FileName, match.LineNumber, match.Content))
+				highlighted := regexp.MustCompile("(?i)(" + pattern + ")").ReplaceAllString(match.Content, "\x1b[31m$1\x1b[0m")
+				matches = append(matches, fmt.Sprintf("%s:%d:%s", match.FileName, match.LineNumber, highlighted))
 			}
 
 			if len(matches) > 0 {
