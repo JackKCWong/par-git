@@ -13,16 +13,18 @@ import (
 )
 
 var (
-	rootDir          string
-	grepInvertMatch  bool
-	grepCommitHash   string
+	rootDir           string
+	grepInvertMatch   bool
+	grepCommitHash    string
 	grepReferenceName string
-	grepPathSpecs    string
+	grepPathSpecs     string
+	grepNamesOnly     bool
 )
 
 type grepResult struct {
-	dir     string
-	matches []string
+	dir       string
+	matches   []string
+	fileNames map[string]int
 }
 
 var grepCmd = &cobra.Command{
@@ -38,6 +40,7 @@ func init() {
 	grepCmd.Flags().StringVarP(&grepCommitHash, "commit", "c", "", "Commit hash to search in")
 	grepCmd.Flags().StringVarP(&grepReferenceName, "branch", "b", "", "Branch or tag name to search in")
 	grepCmd.Flags().StringVarP(&grepPathSpecs, "pathspec", "p", "", "Pathspec pattern to filter files")
+	grepCmd.Flags().BoolVarP(&grepNamesOnly, "names-only", "", false, "Print only filenames with match count")
 	rootCmd.AddCommand(grepCmd)
 }
 
@@ -105,13 +108,18 @@ func runGrep(cmd *cobra.Command, args []string) error {
 			}
 
 			matches := make([]string, 0, len(grepResults))
+			fileNames := make(map[string]int)
 			for _, match := range grepResults {
-				highlighted := regexp.MustCompile("(?i)(" + pattern + ")").ReplaceAllString(match.Content, "\x1b[31m$1\x1b[0m")
-				matches = append(matches, fmt.Sprintf("%s:%d:%s", match.FileName, match.LineNumber, highlighted))
+				if grepNamesOnly {
+					fileNames[match.FileName]++
+				} else {
+					highlighted := regexp.MustCompile("(?i)(" + pattern + ")").ReplaceAllString(match.Content, "\x1b[31m$1\x1b[0m")
+					matches = append(matches, fmt.Sprintf("%s:%d:%s", match.FileName, match.LineNumber, highlighted))
+				}
 			}
 
-			if len(matches) > 0 {
-				results <- grepResult{dir: dir, matches: matches}
+			if len(matches) > 0 || len(fileNames) > 0 {
+				results <- grepResult{dir: dir, matches: matches, fileNames: fileNames}
 			}
 		}(entry.Name())
 	}
@@ -122,8 +130,14 @@ func runGrep(cmd *cobra.Command, args []string) error {
 	}()
 
 	for result := range results {
-		for _, match := range result.matches {
-			fmt.Printf("\x1b[34m%s\x1b[0m:%s\n", result.dir, match)
+		if grepNamesOnly {
+			for fileName, count := range result.fileNames {
+				fmt.Printf("\x1b[34m%s\x1b[0m:%s:%d\n", result.dir, fileName, count)
+			}
+		} else {
+			for _, match := range result.matches {
+				fmt.Printf("\x1b[34m%s\x1b[0m:%s\n", result.dir, match)
+			}
 		}
 	}
 
