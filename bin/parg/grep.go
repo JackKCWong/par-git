@@ -11,6 +11,7 @@ import (
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 var (
@@ -34,6 +35,10 @@ var grepCmd = &cobra.Command{
 	Short: "Run git grep in parallel across all git repos in cwd",
 	Args:  cobra.MinimumNArgs(1),
 	RunE:  runGrep,
+}
+
+func isColorable() bool {
+	return term.IsTerminal(int(os.Stdout.Fd()))
 }
 
 func init() {
@@ -122,7 +127,10 @@ func runGrep(cmd *cobra.Command, args []string) error {
 					content := match.Content
 					for _, p := range patterns {
 						content = p.ReplaceAllStringFunc(content, func(s string) string {
-							return "\x1b[31m" + s + "\x1b[0m"
+							if isColorable() {
+								return "\x1b[31m" + s + "\x1b[0m"
+							}
+							return s
 						})
 					}
 					matches = append(matches, fmt.Sprintf("%s:%d:%s", match.FileName, match.LineNumber, content))
@@ -154,11 +162,19 @@ func runGrep(cmd *cobra.Command, args []string) error {
 		for result := range results {
 			if grepNamesOnly {
 				for fileName, count := range result.fileNames {
-					fmt.Printf("\x1b[34m%s\x1b[0m:%s:%d\n", result.dir, fileName, count)
+					if isColorable() {
+						fmt.Printf("\x1b[34m%s\x1b[0m:%s:%d\n", result.dir, fileName, count)
+					} else {
+						fmt.Printf("%s:%s:%d\n", result.dir, fileName, count)
+					}
 				}
 			} else {
 				for _, match := range result.matches {
-					fmt.Printf("\x1b[34m%s\x1b[0m:%s\n", result.dir, match)
+					if isColorable() {
+						fmt.Printf("\x1b[34m%s\x1b[0m:%s\n", result.dir, match)
+					} else {
+						fmt.Printf("%s:%s\n", result.dir, match)
+					}
 				}
 			}
 		}
