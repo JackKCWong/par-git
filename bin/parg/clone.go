@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,24 +14,25 @@ import (
 )
 
 var (
-	cloneFile          string
-	parallelism        int
-	cloneBranch        string
-	cloneDepth         int
+	cloneFile             string
+	parallelism           int
+	cloneBranch           string
+	cloneDepth            int
 	cloneRecurseSubmodules bool
-	cloneSingleBranch  bool
-	cloneBare          bool
+	cloneSingleBranch     bool
+	cloneBare             bool
+	cloneOrg              string
 )
 
 type cloneResult struct {
-	url  string
-	dir  string
-	err  error
+	url string
+	dir string
+	err error
 }
 
 var cloneCmd = &cobra.Command{
 	Use:   "clone",
-	Short: "Clone multiple git repos in parallel from a file containing URLs",
+	Short: "Clone multiple git repos in parallel",
 	RunE:  runClone,
 }
 
@@ -42,26 +44,32 @@ func init() {
 	cloneCmd.Flags().BoolVar(&cloneRecurseSubmodules, "recurse-submodules", false, "Initialize and clone submodules")
 	cloneCmd.Flags().BoolVar(&cloneSingleBranch, "single-branch", false, "Clone only the specified branch")
 	cloneCmd.Flags().BoolVar(&cloneBare, "bare", false, "Clone as a bare repository")
+	cloneCmd.Flags().StringVar(&cloneOrg, "org", "", "GitHub org or user URL; clones all repos under it")
 	rootCmd.AddCommand(cloneCmd)
 }
 
 func runClone(cmd *cobra.Command, args []string) error {
-	if cloneFile == "" {
-		return fmt.Errorf("file flag (-f) is required")
-	}
-
-	data, err := os.ReadFile(cloneFile)
-	if err != nil {
-		return fmt.Errorf("failed to read file: %w", err)
-	}
-
-	urls := parseURLs(string(data))
-	if len(urls) == 0 {
-		return fmt.Errorf("no URLs found in file")
+	if (cloneFile == "") == (cloneOrg == "") {
+		return fmt.Errorf("exactly one of --file or --org must be provided")
 	}
 
 	if parallelism <= 0 {
 		parallelism = 8
+	}
+
+	urls, baseDir, err := resolveCloneSources()
+	if err != nil {
+		return err
+	}
+
+	if len(urls) == 0 {
+		return fmt.Errorf("no URLs to clone")
+	}
+
+	if baseDir != "." && baseDir != "" {
+		if err := os.MkdirAll(baseDir, 0o755); err != nil {
+			return fmt.Errorf("failed to create directory %s: %w", baseDir, err)
+		}
 	}
 
 	sem := make(chan struct{}, parallelism)
@@ -75,8 +83,11 @@ func runClone(cmd *cobra.Command, args []string) error {
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			dir := filepath.Base(url)
-			dir = strings.TrimSuffix(dir, ".git")
+			name := strings.TrimSuffix(filepath.Base(url), ".git")
+			dir := name
+			if baseDir != "" && baseDir != "." {
+				dir = filepath.Join(baseDir, name)
+			}
 
 			co := &git.CloneOptions{
 				URL: url,
@@ -117,6 +128,34 @@ func runClone(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
+}
+
+func resolveCloneSources() ([]string, string, error) {
+	if cloneOrg != "" {
+		host, org, err := parseOrgURL(cloneOrg)
+		if err != nil {
+			return nil, "", fmt.Errorf("invalid --org URL: %w", err)
+		}
+		if isNonGitHubHost(host) {
+			return nil, "", fmt.Errorf("--org currently supports GitHub only (got host %q)", host)
+		}
+
+		urls, err := listOrgRepos(context.Background(), host, org)
+		if err != nil {
+			return nil, "", fmt.Errorf("failed to list repos for %s: %w", org, err)
+		}
+
+		fmt.Printf("Found %d repos in %s\n", len(urls), org)
+		return urls, org, nil
+	}
+
+	data, err := os.ReadFile(cloneFile)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to read file: %w", err)
+	}
+
+	urls := parseURLs(string(data))
+	return urls, ".", nil
 }
 
 func parseURLs(data string) []string {
