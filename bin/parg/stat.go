@@ -224,7 +224,21 @@ func runStat(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to read directory: %w", err)
 	}
 
-	var repos []string
+	type repoEntry struct {
+		name string
+		path string
+	}
+	var repos []repoEntry
+
+	if _, err := os.Stat(filepath.Join(statDirectory, ".git")); err == nil {
+		abs, _ := filepath.Abs(statDirectory)
+		name := filepath.Base(abs)
+		if name == "" || name == "." || name == string(filepath.Separator) {
+			name = filepath.Base(statDirectory)
+		}
+		repos = append(repos, repoEntry{name: name, path: statDirectory})
+	}
+
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -233,7 +247,10 @@ func runStat(cmd *cobra.Command, args []string) error {
 		if _, err := os.Stat(gitPath); os.IsNotExist(err) {
 			continue
 		}
-		repos = append(repos, entry.Name())
+		repos = append(repos, repoEntry{
+			name: entry.Name(),
+			path: filepath.Join(statDirectory, entry.Name()),
+		})
 	}
 
 	if len(repos) == 0 {
@@ -248,30 +265,28 @@ func runStat(cmd *cobra.Command, args []string) error {
 
 	for _, repo := range repos {
 		wg.Add(1)
-		go func(dir string) {
+		go func(entry repoEntry) {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
 			start := time.Now()
-			statLogf("scan: %s", dir)
+			statLogf("scan: %s", entry.name)
 
-			rr := repoResult{dir: dir, byline: map[string]*authorStats{}}
+			rr := repoResult{dir: entry.name, byline: map[string]*authorStats{}}
 
-			repoPath := filepath.Join(statDirectory, dir)
-
-			commits, gitStderr, err := runGitLog(repoPath, statBranch, since, until, statNoMerges, statNoStats, statBy == "committer")
+			commits, gitStderr, err := runGitLog(entry.path, statBranch, since, until, statNoMerges, statNoStats, statBy == "committer")
 			if err != nil {
 				rr.err = err
 				if statVerbose && len(gitStderr) > 0 {
-					statLogf("  %s: git stderr: %s", dir, strings.TrimSpace(string(gitStderr)))
+					statLogf("  %s: git stderr: %s", entry.name, strings.TrimSpace(string(gitStderr)))
 				}
-				statLogf("FAIL %s in %s: %v", dir, time.Since(start), err)
+				statLogf("FAIL %s in %s: %v", entry.name, time.Since(start), err)
 				results <- rr
 				return
 			}
 
-			statLogf("  %s: %d commits in %s", dir, len(commits), time.Since(start))
+			statLogf("  %s: %d commits in %s", entry.name, len(commits), time.Since(start))
 
 			for _, c := range commits {
 				key := authorKey(c.Author, c.Email)
@@ -288,10 +303,10 @@ func runStat(cmd *cobra.Command, args []string) error {
 				as.Files += c.Files
 				as.Added += c.Added
 				as.Deleted += c.Deleted
-				as.Repos[dir] = struct{}{}
+				as.Repos[entry.name] = struct{}{}
 			}
 
-			statLogf("done %s: %d commits, %d authors in %s", dir, len(commits), len(rr.byline), time.Since(start))
+			statLogf("done %s: %d commits, %d authors in %s", entry.name, len(commits), len(rr.byline), time.Since(start))
 			results <- rr
 		}(repo)
 	}
